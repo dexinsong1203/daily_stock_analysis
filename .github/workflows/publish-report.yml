@@ -1,0 +1,51 @@
+name: 发布报告
+
+on:
+  workflow_run:
+    workflows: ["每日股票分析"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载分析产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: analysis-reports-*
+          merge-multiple: true
+          path: dl
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 发布到 reports 分支
+        run: |
+          set -e
+          find dl -name 'report_*.md' -print
+          R=$(find dl -name 'report_*.md' | head -1)
+          if [ -z "$R" ]; then echo "::error::no report md in artifact"; ls -R dl; exit 1; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin
+          if git ls-remote --exit-code --heads origin reports >/dev/null 2>&1; then
+            git checkout -B reports origin/reports
+          else
+            git checkout --orphan reports
+          fi
+          git rm -rf . >/dev/null 2>&1 || true
+          rm -rf dl
+          cp "$R" ./
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "report: $(basename $R)"
+            git push origin reports
+          fi
